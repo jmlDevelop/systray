@@ -1,3 +1,4 @@
+//go:build windows
 // +build windows
 
 package systray
@@ -5,6 +6,7 @@ package systray
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -247,12 +249,13 @@ var wt winTray
 // https://msdn.microsoft.com/en-us/library/windows/desktop/ms633573(v=vs.85).aspx
 func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam uintptr) (lResult uintptr) {
 	const (
-		WM_RBUTTONUP  = 0x0205
-		WM_LBUTTONUP  = 0x0202
-		WM_COMMAND    = 0x0111
-		WM_ENDSESSION = 0x0016
-		WM_CLOSE      = 0x0010
-		WM_DESTROY    = 0x0002
+		WM_RBUTTONUP   = 0x0205
+		WM_LBUTTONDOWN = 0x0201 // 监听左键按下
+		WM_LBUTTONUP   = 0x0202
+		WM_COMMAND     = 0x0111
+		WM_ENDSESSION  = 0x0016
+		WM_CLOSE       = 0x0010
+		WM_DESTROY     = 0x0002
 	)
 	switch message {
 	case WM_COMMAND:
@@ -277,8 +280,11 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 		systrayExit()
 	case t.wmSystrayMessage:
 		switch lParam {
-		case WM_RBUTTONUP, WM_LBUTTONUP:
-			t.showMenu()
+		case WM_RBUTTONUP:
+			t.showMenu() // 仅右键弹出菜单
+		case WM_LBUTTONDOWN:
+			// 这里可以定义左键的自定义逻辑，比如打开主窗口
+			go t.onLeftClick()
 		}
 	case t.wmTaskbarCreated: // on explorer.exe restarts
 		t.muNID.Lock()
@@ -295,6 +301,12 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 		)
 	}
 	return
+}
+
+// 定义左键点击逻辑，例如打开一个主窗口
+func (t *winTray) onLeftClick() {
+	// 可以在这里执行自定义操作，比如打开一个窗口
+	fmt.Println("左键点击托盘，执行自定义逻辑")
 }
 
 func (t *winTray) initInstance() error {
