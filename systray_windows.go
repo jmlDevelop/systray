@@ -282,7 +282,7 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 		switch lParam {
 		case WM_RBUTTONUP:
 			t.showMenu() // 仅右键弹出菜单
-		case WM_LBUTTONDOWN:
+		case WM_LBUTTONUP:
 			// 这里可以定义左键的自定义逻辑，比如打开主窗口
 			go t.onLeftClick()
 		}
