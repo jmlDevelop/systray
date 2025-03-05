@@ -13,6 +13,7 @@ import (
 	"sort"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -51,6 +52,8 @@ var (
 	pLoadIcon              = u32.NewProc("LoadIconW")
 	pLoadImage             = u32.NewProc("LoadImageW")
 	pPostMessage           = u32.NewProc("PostMessageW")
+	modUser32              = windows.NewLazySystemDLL("user32.dll")
+	pSetFocus              = modUser32.NewProc("SetFocus") // 这里修复 `SetFocus`
 	pPostQuitMessage       = u32.NewProc("PostQuitMessage")
 	pRegisterClass         = u32.NewProc("RegisterClassExW")
 	pRegisterWindowMessage = u32.NewProc("RegisterWindowMessageW")
@@ -245,22 +248,24 @@ func (t *winTray) setTooltip(src string) error {
 
 var wt winTray
 
+const WM_NULL = 0x0000
+
 // WindowProc callback function that processes messages sent to a window.
 // https://msdn.microsoft.com/en-us/library/windows/desktop/ms633573(v=vs.85).aspx
 func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam uintptr) (lResult uintptr) {
 	const (
 		WM_RBUTTONUP   = 0x0205
-		WM_LBUTTONDOWN = 0x0201 // 监听左键按下
 		WM_LBUTTONUP   = 0x0202
+		WM_LBUTTONDOWN = 0x0201
 		WM_COMMAND     = 0x0111
 		WM_ENDSESSION  = 0x0016
 		WM_CLOSE       = 0x0010
 		WM_DESTROY     = 0x0002
 	)
+
 	switch message {
 	case WM_COMMAND:
 		menuItemId := int32(wParam)
-		// https://docs.microsoft.com/en-us/windows/win32/menurc/wm-command#menus
 		if menuItemId != -1 {
 			systrayMenuItemSelected(uint32(wParam))
 		}
@@ -268,7 +273,6 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 		pDestroyWindow.Call(uintptr(t.window))
 		t.wcex.unregister()
 	case WM_DESTROY:
-		// same as WM_ENDSESSION, but throws 0 exit code after all
 		defer pPostQuitMessage.Call(uintptr(int32(0)))
 		fallthrough
 	case WM_ENDSESSION:
@@ -281,18 +285,15 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 	case t.wmSystrayMessage:
 		switch lParam {
 		case WM_RBUTTONUP:
-			t.showMenu() // 仅右键弹出菜单
-		case WM_LBUTTONUP:
-			// 这里可以定义左键的自定义逻辑，比如打开主窗口
+			go t.showContextMenu()
+		case WM_LBUTTONDOWN:
 			go t.onLeftClick()
 		}
-	case t.wmTaskbarCreated: // on explorer.exe restarts
+	case t.wmTaskbarCreated:
 		t.muNID.Lock()
 		t.nid.add()
 		t.muNID.Unlock()
 	default:
-		// Calls the default window procedure to provide default processing for any window messages that an application does not process.
-		// https://msdn.microsoft.com/en-us/library/windows/desktop/ms633572(v=vs.85).aspx
 		lResult, _, _ = pDefWindowProc.Call(
 			uintptr(hWnd),
 			uintptr(message),
@@ -303,11 +304,45 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 	return
 }
 
-// 定义左键点击逻辑，例如打开一个主窗口
+// 处理左键点击，使其不会失效
 func (t *winTray) onLeftClick() {
-	// 可以在这里执行自定义操作，比如打开一个窗口
-	fmt.Println("左键点击托盘，执行自定义逻辑")
+	t.muNID.Lock()
+	defer t.muNID.Unlock()
+
+	// 让窗口获得焦点，确保左键不会被 Windows 屏蔽
+	pSetForegroundWindow.Call(uintptr(t.window))
+	fmt.Println("左键点击托盘")
+
+	// 让 Windows 重新激活托盘事件队列
+	pPostMessage.Call(uintptr(t.window), WM_NULL, 0, 0)
 }
+
+// 右键菜单处理，确保右键后左键仍然有效
+func (t *winTray) showContextMenu() {
+	t.muNID.Lock()
+	defer t.muNID.Unlock()
+
+	if t.nid == nil {
+		return
+	}
+
+	// 让窗口获得焦点，确保右键菜单能正确打开
+	pSetForegroundWindow.Call(uintptr(t.window))
+
+	// 显示菜单
+	t.showMenu()
+
+	// **关键修复**
+	// 右键菜单关闭后，恢复窗口焦点，避免左键失效
+	time.Sleep(100 * time.Millisecond) // 确保 TrackPopupMenu 关闭
+	pSetForegroundWindow.Call(uintptr(t.window))
+	pSetFocus.Call(uintptr(t.window))
+
+	// **确保 Windows 处理队列刷新**
+	pPostMessage.Call(uintptr(t.window), WM_NULL, 0, 0)
+}
+
+// 定义左键点击逻辑，例如打开一个主窗口
 
 func (t *winTray) initInstance() error {
 	const IDI_APPLICATION = 32512
